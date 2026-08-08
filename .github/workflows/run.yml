@@ -207,7 +207,7 @@ jobs:
       - name: Get geoip.dat relative files
         run: |
           wget -O geoip-lite.dat https://github.com/xishang0128/geoip/raw/release/geoip.dat
-          wget https://github.com/Loyalsoldier/geoip/raw/release/geoip.dat
+          wget https://github.com/xiandu999-yu/geoip/raw/release/geoip.dat
 
       - name: Build db and metadb file
         env:
@@ -290,7 +290,7 @@ jobs:
         run: |
           mkdir -p ./publish/
           wget https://raw.githubusercontent.com/xishang0128/geoip/release/Country.mmdb -O ./publish/country-lite.mmdb
-          wget https://raw.githubusercontent.com/Loyalsoldier/geoip/release/Country.mmdb -O ./publish/country.mmdb
+          wget https://raw.githubusercontent.com/xiandu999-yu/geoip/release/Country.mmdb -O ./publish/country.mmdb
           wget https://raw.githubusercontent.com/xishang0128/geoip/release/GeoLite2-ASN.mmdb -O ./publish/GeoLite2-ASN.mmdb
           install -Dp ./geoip-lite.dat ./publish/
           install -Dp ./geoip.dat ./publish/
