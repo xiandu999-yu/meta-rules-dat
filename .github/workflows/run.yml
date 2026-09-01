@@ -21,15 +21,31 @@ jobs:
           echo "CHINA_DOMAINS_URL=https://raw.githubusercontent.com/blackmatrix7/ios_rule_script/master/rule/Clash/ChinaMax/ChinaMax_Domain.txt" >> $GITHUB_ENV
           echo "GOOGLE_DOMAINS_URL=https://raw.githubusercontent.com/felixonmars/dnsmasq-china-list/master/google.china.conf" >> $GITHUB_ENV
           echo "APPLE_DOMAINS_URL=https://raw.githubusercontent.com/felixonmars/dnsmasq-china-list/master/apple.china.conf" >> $GITHUB_ENV
-          # echo "CUSTOM_DIRECT=https://raw.githubusercontent.com/Loyalsoldier/domain-list-custom/release/cn.txt" >> $GITHUB_ENV
+          # 启用 CUSTOM_DIRECT（工作流2 需要）
+          echo "CUSTOM_DIRECT=https://raw.githubusercontent.com/Loyalsoldier/domain-list-custom/release/cn.txt" >> $GITHUB_ENV
           echo "CUSTOM_PROXY=https://raw.githubusercontent.com/Loyalsoldier/domain-list-custom/release/geolocation-!cn.txt" >> $GITHUB_ENV
           echo "WIN_SPY=https://raw.githubusercontent.com/crazy-max/WindowsSpyBlocker/master/data/hosts/spy.txt" >> $GITHUB_ENV
           echo "WIN_UPDATE=https://raw.githubusercontent.com/crazy-max/WindowsSpyBlocker/master/data/hosts/update.txt" >> $GITHUB_ENV
           echo "WIN_EXTRA=https://raw.githubusercontent.com/crazy-max/WindowsSpyBlocker/master/data/hosts/extra.txt" >> $GITHUB_ENV
+          # 新增工作流2 的环境变量（广告拦截源）
+          echo "EASYLISTCHINA_EASYLIST_REJECT_URL=https://easylist-downloads.adblockplus.org/easylistchina+easylist.txt" >> $GITHUB_ENV
+          echo "EASYLISTCHINA_EASYLIST_PRIVACY_REJECT_URL=https://easylist.to/easylist/easyprivacy.txt" >> $GITHUB_ENV
+          echo "PETERLOWE_REJECT_URL=https://pgl.yoyo.org/adservers/serverlist.php?hostformat=hosts&showintro=1&mimetype=plaintext" >> $GITHUB_ENV
+          echo "ADGUARD_DNS_REJECT_URL=https://adguardteam.github.io/AdGuardSDNSFilter/Filters/filter.txt" >> $GITHUB_ENV
+          echo "AWAVENUE_ADS_RULE_URL=https://raw.githubusercontent.com/TG-Twilight/AWAvenue-Ads-Rule/refs/heads/build/rule/domain.txt" >> $GITHUB_ENV
+          echo "AWAVENUE_ADS_RULE_GEOSITE_URL=https://raw.githubusercontent.com/TG-Twilight/AWAvenue-Ads-Rule/refs/heads/main/Filters/AWAvenue-Ads-Rule-Geosite.txt" >> $GITHUB_ENV
+          echo "DANPOLLOCK_REJECT_URL=https://someonewhocares.org/hosts/hosts" >> $GITHUB_ENV
         shell: bash
 
       - name: Checkout the current repo
         uses: actions/checkout@v4
+
+      # 新增：检出 hidden 分支到独立目录，供后续步骤使用
+      - name: Checkout hidden branch
+        uses: actions/checkout@v4
+        with:
+          ref: hidden
+          path: hidden
 
       - name: Checkout Loyalsoldier/domain-list-custom
         uses: actions/checkout@v4
@@ -70,7 +86,8 @@ jobs:
       - name: Get and add direct domains into temp-direct.txt file
         run: |
           curl -sSL ${CHINA_DOMAINS_URL} | sed '/^\s*#/d' | sed '/^[^\.]/ s/^/full:/' |  sed 's/^\.\([^.]*\)/\1/' > temp-direct.txt 
-          # curl -sSL ${CUSTOM_DIRECT} | perl -ne '/^(domain):([^:]+)(\n$|:@.+)/ && print "$2\n"' >> temp-direct.txt
+          # 新增：从 CUSTOM_DIRECT 追加（工作流2 做法）
+          curl -sSL ${CUSTOM_DIRECT} | perl -ne '/^(domain):([^:]+)(\n$|:@.+)/ && print "$2\n"' >> temp-direct.txt
 
       - name: Get and add proxy domains into temp-proxy.txt file
         run: |
@@ -79,22 +96,46 @@ jobs:
           curl -sSL $APPLE_DOMAINS_URL | perl -ne '/^server=\/([^\/]+)\// && print "$1\n"' >> temp-proxy.txt
           curl -sSL ${CUSTOM_PROXY} | grep -Ev ":@cn" | perl -ne '/^(domain):([^:]+)(\n$|:@.+)/ && print "$2\n"' >> temp-proxy.txt
 
+      # 新增：获取广告/拒绝域名到 temp-reject.txt
+      - name: Get and add reject domains into temp-reject.txt file
+        run: |
+          curl -sSL $EASYLISTCHINA_EASYLIST_REJECT_URL | perl -ne '/^\|\|([-_0-9a-zA-Z]+(\.[-_0-9a-zA-Z]+){1,64})\^$/ && print "$1\n"' | perl -ne 'print if not /^[0-9]{1,3}(\.[0-9]{1,3}){3}$/' > temp-reject.txt
+          curl -sSL $ADGUARD_DNS_REJECT_URL | perl -ne '/^\|\|([-_0-9a-zA-Z]+(\.[-_0-9a-zA-Z]+){1,64})\^$/ && print "$1\n"' | perl -ne 'print if not /^[0-9]{1,3}(\.[0-9]{1,3}){3}$/' >> temp-reject.txt
+          curl -sSL $PETERLOWE_REJECT_URL | perl -ne '/^127\.0\.0\.1\s([-_0-9a-zA-Z]+(\.[-_0-9a-zA-Z]+){1,64})$/ && print "$1\n"' >> temp-reject.txt
+          curl -sSL $DANPOLLOCK_REJECT_URL | perl -ne '/^127\.0\.0\.1\s([-_0-9a-zA-Z]+(\.[-_0-9a-zA-Z]+){1,64})/ && print "$1\n"' | sed '1d' >> temp-reject.txt
+          curl -sSL $AWAVENUE_ADS_RULE_URL  >> temp-reject.txt
+          # 追加 hidden 分支的 reject.txt
+          cat ./hidden/reject.txt >> temp-reject.txt
+
       - name: Reserve `full`, `regexp` and `keyword` type of rules from custom lists to "reserve" files
         run: |
-          # curl -sSL ${CUSTOM_DIRECT} | grep -v google | grep -v manhua | grep -v ooklaserver | grep -v "acg.rip" | perl -ne '/^((full|regexp|keyword):[^:]+)(\n$|:@.+)/ && print "$1\n"' | sort --ignore-case -u > direct-reserve.txt
+          # 原有：仅 proxy-reserve
           curl -sSL ${CUSTOM_PROXY} | grep -Ev ":@cn" | perl -ne '/^((full|regexp|keyword):[^:]+)(\n$|:@.+)/ && print "$1\n"' | sort --ignore-case -u > proxy-reserve.txt
-          
+          # 新增：生成 direct-reserve（工作流2 做法）
+          curl -sSL ${CUSTOM_DIRECT} | perl -ne '/^((full|regexp|keyword):[^:]+)(\n$|:@.+)/ && print "$1\n"' | sort --ignore-case -u > direct-reserve.txt
+          # 新增：生成 reject-reserve（工作流2 没有，但可预留，此处不生成）
+          # 工作流2 没有 reject-reserve，所以跳过
+
       - name: Add proxy, direct and reject domains from "hidden" branch to appropriate temp files
         run: |
+          # 原有：从 master 的 resouces 添加（仅 proxy 和 direct）
           cat ./resouces/proxy.txt >> temp-proxy.txt
           cat ./resouces/direct.txt >> temp-direct.txt
-          # cat reject.txt >> temp-reject.txt
+          # 新增：从 hidden 分支追加 proxy 和 direct（工作流2 的做法）
+          cat ./hidden/proxy.txt >> temp-proxy.txt
+          cat ./hidden/direct.txt >> temp-direct.txt
+          # reject 已在前面步骤中追加，此处不再重复
 
       - name: Sort and generate redundant lists
         run: |
           cat temp-proxy.txt | sort --ignore-case -u > proxy-list-with-redundant
           cat temp-direct.txt | sort --ignore-case -u > direct-list-with-redundant
-          # cat temp-reject.txt | sort --ignore-case -u > reject-list-with-redundant
+          # 原有没有 reject，现新增对 reject 的排序（单独步骤）
+
+      # 新增：对 reject 列表排序
+      - name: Sort reject list
+        run: |
+          cat temp-reject.txt | sort --ignore-case -u > reject-list-with-redundant
 
       - name: Remove redundant domains
         run: |
@@ -108,10 +149,25 @@ jobs:
           python ./resouces/removeFrom.py -remove ./direct-list-deleted-sort -from ./direct-list-with-redundant -out direct-list-without-redundant
           python ./resouces/removeFrom.py -remove ./proxy-list-deleted-sort -from ./proxy-list-with-redundant -out proxy-list-without-redundant
 
+      # 新增：对 reject 列表去冗余
+      - name: Remove redundant domains from reject
+        run: |
+          chmod +x ./resouces/*.py
+          python ./resouces/findRedundantDomain.py ./reject-list-with-redundant ./reject-list-deleted-unsort
+          [ ! -f "reject-list-deleted-unsort" ] && touch reject-list-deleted-unsort
+          sort ./reject-list-deleted-unsort > ./reject-list-deleted-sort
+          python ./resouces/removeFrom.py -remove ./reject-list-deleted-sort -from ./reject-list-with-redundant -out reject-list-without-redundant
+
       - name: Remove domains from "need-to-remove" lists in "hidden" branch
         run: |
+          # 原有：处理 direct 和 proxy（使用 removeFrom.py）
           python ./resouces/removeFrom.py -remove ./resouces/direct-need-to-remove.txt -from ./direct-list-without-redundant -out ./temp-cn.txt
           python ./resouces/removeFrom.py -remove ./resouces/proxy-need-to-remove.txt -from ./proxy-list-without-redundant -out ./temp-geolocation-\!cn.txt
+
+      # 新增：处理 reject 的 need-to-remove（使用 hidden 分支的文件）
+      - name: Remove reject domains from need-to-remove
+        run: |
+          python ./resouces/removeFrom.py -remove ./hidden/reject-need-to-remove.txt -from ./reject-list-without-redundant -out ./temp-category-ads-all.txt
 
       - name: Remove domains end with ".cn" in "temp-geolocation-!cn.txt" and write lists to data directory
         run: |
@@ -119,6 +175,12 @@ jobs:
           cat temp-cn.txt | sort --ignore-case -u | perl -ne 'print if not /^((?=^.{3,255})[a-zA-Z0-9][-_a-zA-Z0-9]{0,62}(\.[a-zA-Z0-9][-_a-zA-Z0-9]{0,62})+)/' > direct-tld-list.txt
           cat temp-geolocation-\!cn.txt | sort --ignore-case -u | perl -ne '/^((?=^.{1,255})[a-zA-Z0-9][-_a-zA-Z0-9]{0,62}(\.[a-zA-Z0-9][-_a-zA-Z0-9]{0,62})*)/ && print "$1\n"' | perl -ne 'print if not /\.cn$/' > ./community/data/geolocation-\!cn
           cat temp-geolocation-\!cn.txt | sort --ignore-case -u | perl -ne 'print if not /^((?=^.{3,255})[a-zA-Z0-9][-_a-zA-Z0-9]{0,62}(\.[a-zA-Z0-9][-_a-zA-Z0-9]{0,62})+)/' > proxy-tld-list.txt
+
+      # 新增：写入 category-ads-all 到 data 目录
+      - name: Write category-ads-all to data directory
+        run: |
+          cat temp-category-ads-all.txt | sort --ignore-case -u | perl -ne '/^((?=^.{1,255})[a-zA-Z0-9][-_a-zA-Z0-9]{0,62}(\.[a-zA-Z0-9][-_a-zA-Z0-9]{0,62})*)/ && print "$1\n"' > ./community/data/category-ads-all
+          cat temp-category-ads-all.txt | sort --ignore-case -u | perl -ne 'print if not /^((?=^.{3,255})[a-zA-Z0-9][-_a-zA-Z0-9]{0,62}(\.[a-zA-Z0-9][-_a-zA-Z0-9]{0,62})+)/' > reject-tld-list.txt
 
       - name: Add `full`, `regexp` and `keyword` type of rules back into "cn", and "geolocation-!cn" list
         run: |
@@ -135,6 +197,21 @@ jobs:
           curl -sSL $WIN_SPY | grep "0.0.0.0" | awk '{print $2}' > ./community/data/win-spy
           curl -sSL $WIN_UPDATE | grep "0.0.0.0" | awk '{print $2}' > ./community/data/win-update
           curl -sSL $WIN_EXTRA | grep "0.0.0.0" | awk '{print $2}' > ./community/data/win-extra
+
+      # 新增：生成额外分类列表（工作流2 独有）
+      - name: Create additional category lists
+        run: |
+          # china-list（从 dnsmasq china 列表）
+          curl -sSL $CHINA_DOMAINS_URL | perl -ne '/^server=\/([^\/]+)\// && print "$1\n"' > ./community/data/china-list
+          # greatfire（从 hidden 分支复制，若存在）
+          [ -f ./hidden/greatfire ] && cat ./hidden/greatfire > ./community/data/greatfire || echo "greatfire not found in hidden, skip"
+          # 广告子分类
+          curl -sSL $EASYLISTCHINA_EASYLIST_REJECT_URL | perl -ne '/^\|\|([-_0-9a-zA-Z]+(\.[-_0-9a-zA-Z]+){1,64})\^$/ && print "full:$1\n"' | perl -ne 'print if not /^[0-9]{1,3}(\.[0-9]{1,3}){3}$/' > ./community/data/category-ads-EasyList
+          curl -sSL $EASYLISTCHINA_EASYLIST_PRIVACY_REJECT_URL | perl -ne '/^\|\|([-_0-9a-zA-Z]+(\.[-_0-9a-zA-Z]+){1,64})\^$/ && print "full:$1\n"' | perl -ne 'print if not /^[0-9]{1,3}(\.[0-9]{1,3}){3}$/' > ./community/data/EasyListPrivacy
+          curl -sSL $ADGUARD_DNS_REJECT_URL | perl -ne '/^\|\|([-_0-9a-zA-Z]+(\.[-_0-9a-zA-Z]+){1,64})\^$/ && print "full:$1\n"' | perl -ne 'print if not /^[0-9]{1,3}(\.[0-9]{1,3}){3}$/' > ./community/data/category-ads-AdGuardDNSFilter
+          curl -sSL $PETERLOWE_REJECT_URL | perl -ne '/^127\.0\.0\.1\s([-_0-9a-zA-Z]+(\.[-_0-9a-zA-Z]+){1,64})$/ && print "full:$1\n"' > ./community/data/category-ads-PeterLowe
+          curl -sSL $DANPOLLOCK_REJECT_URL | perl -ne '/^127\.0\.0\.1\s([-_0-9a-zA-Z]+(\.[-_0-9a-zA-Z]+){1,64})/ && print "full:$1\n"' | sed '1d' > ./community/data/category-ads-DanPollock
+          curl -sSL $AWAVENUE_ADS_RULE_GEOSITE_URL > ./community/data/category-ads-AWAvenueAdsRule
 
       - name: merge 'ios_rule_script/SteamCN'
         env:
@@ -160,7 +237,7 @@ jobs:
       - name: Build geosite.dat file
         run: |
           cd custom || exit 1
-          # echo sentry.io >>  ../community/data/openai
+          # 新增：追加 ipleak.net 和 browserleaks.org 到 proxy（工作流2 没有，但沿用工作流1）
           echo ipleak.net >> ../community/data/geolocation-\!cn && echo browserleaks.org >> ../community/data/geolocation-\!cn
           go run ./ --datapath=../community/data
 
@@ -362,10 +439,10 @@ jobs:
             git remote add origin "https://${{ github.actor }}:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}"
             git push -f -u origin meta
 
-
       - name: Purge jsdelivr CDN
         run: |
           cd publish || exit 1
           for file in $(ls); do
             curl -i "https://purge.jsdelivr.net/gh/${{ github.repository }}@release/${file}"
           done
+          
