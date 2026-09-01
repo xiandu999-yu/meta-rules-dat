@@ -18,16 +18,19 @@ jobs:
         run: |
           echo "GOAMD64=v3" >> $GITHUB_ENV
           echo "BUILDTIME=$(TZ=Asia/Shanghai date +'%Y-%m-%d %H:%M')" >> $GITHUB_ENV
+          # 工作流1 原有的 ChinaMax 直连源（保留）
           echo "CHINA_DOMAINS_URL=https://raw.githubusercontent.com/blackmatrix7/ios_rule_script/master/rule/Clash/ChinaMax/ChinaMax_Domain.txt" >> $GITHUB_ENV
+          # 新增 accelerated-domains.china.conf（工作流2 主要直连源）
+          echo "ACCELERATED_DOMAINS_URL=https://raw.githubusercontent.com/felixonmars/dnsmasq-china-list/master/accelerated-domains.china.conf" >> $GITHUB_ENV
           echo "GOOGLE_DOMAINS_URL=https://raw.githubusercontent.com/felixonmars/dnsmasq-china-list/master/google.china.conf" >> $GITHUB_ENV
           echo "APPLE_DOMAINS_URL=https://raw.githubusercontent.com/felixonmars/dnsmasq-china-list/master/apple.china.conf" >> $GITHUB_ENV
-          # 启用 CUSTOM_DIRECT（工作流2 需要）
+          # 工作流1 原先注释掉 CUSTOM_DIRECT，现在启用（工作流2 也需要）
           echo "CUSTOM_DIRECT=https://raw.githubusercontent.com/Loyalsoldier/domain-list-custom/release/cn.txt" >> $GITHUB_ENV
           echo "CUSTOM_PROXY=https://raw.githubusercontent.com/Loyalsoldier/domain-list-custom/release/geolocation-!cn.txt" >> $GITHUB_ENV
           echo "WIN_SPY=https://raw.githubusercontent.com/crazy-max/WindowsSpyBlocker/master/data/hosts/spy.txt" >> $GITHUB_ENV
           echo "WIN_UPDATE=https://raw.githubusercontent.com/crazy-max/WindowsSpyBlocker/master/data/hosts/update.txt" >> $GITHUB_ENV
           echo "WIN_EXTRA=https://raw.githubusercontent.com/crazy-max/WindowsSpyBlocker/master/data/hosts/extra.txt" >> $GITHUB_ENV
-          # 新增工作流2 的环境变量（广告拦截源）
+          # 新增工作流2 的广告拦截源
           echo "EASYLISTCHINA_EASYLIST_REJECT_URL=https://easylist-downloads.adblockplus.org/easylistchina+easylist.txt" >> $GITHUB_ENV
           echo "EASYLISTCHINA_EASYLIST_PRIVACY_REJECT_URL=https://easylist.to/easylist/easyprivacy.txt" >> $GITHUB_ENV
           echo "PETERLOWE_REJECT_URL=https://pgl.yoyo.org/adservers/serverlist.php?hostformat=hosts&showintro=1&mimetype=plaintext" >> $GITHUB_ENV
@@ -40,7 +43,7 @@ jobs:
       - name: Checkout the current repo
         uses: actions/checkout@v4
 
-      # 新增：检出 hidden 分支到独立目录，供后续步骤使用
+      # 新增：检出 hidden 分支到独立目录
       - name: Checkout hidden branch
         uses: actions/checkout@v4
         with:
@@ -85,9 +88,12 @@ jobs:
 
       - name: Get and add direct domains into temp-direct.txt file
         run: |
+          # 保留工作流1 从 ChinaMax 获取，并做格式处理
           curl -sSL ${CHINA_DOMAINS_URL} | sed '/^\s*#/d' | sed '/^[^\.]/ s/^/full:/' |  sed 's/^\.\([^.]*\)/\1/' > temp-direct.txt 
           # 新增：从 CUSTOM_DIRECT 追加（工作流2 做法）
           curl -sSL ${CUSTOM_DIRECT} | perl -ne '/^(domain):([^:]+)(\n$|:@.+)/ && print "$2\n"' >> temp-direct.txt
+          # 新增：从 accelerated-domains.china.conf 追加（使其加入主直连列表 cn）
+          curl -sSL ${ACCELERATED_DOMAINS_URL} | perl -ne '/^server=\/([^\/]+)\// && print "$1\n"' >> temp-direct.txt
 
       - name: Get and add proxy domains into temp-proxy.txt file
         run: |
@@ -109,28 +115,25 @@ jobs:
 
       - name: Reserve `full`, `regexp` and `keyword` type of rules from custom lists to "reserve" files
         run: |
-          # 原有：仅 proxy-reserve
+          # 原有：proxy-reserve
           curl -sSL ${CUSTOM_PROXY} | grep -Ev ":@cn" | perl -ne '/^((full|regexp|keyword):[^:]+)(\n$|:@.+)/ && print "$1\n"' | sort --ignore-case -u > proxy-reserve.txt
-          # 新增：生成 direct-reserve（工作流2 做法）
+          # 新增：direct-reserve（来自 CUSTOM_DIRECT）
           curl -sSL ${CUSTOM_DIRECT} | perl -ne '/^((full|regexp|keyword):[^:]+)(\n$|:@.+)/ && print "$1\n"' | sort --ignore-case -u > direct-reserve.txt
-          # 新增：生成 reject-reserve（工作流2 没有，但可预留，此处不生成）
-          # 工作流2 没有 reject-reserve，所以跳过
 
       - name: Add proxy, direct and reject domains from "hidden" branch to appropriate temp files
         run: |
-          # 原有：从 master 的 resouces 添加（仅 proxy 和 direct）
+          # 原有：从 resouces（master 分支）添加
           cat ./resouces/proxy.txt >> temp-proxy.txt
           cat ./resouces/direct.txt >> temp-direct.txt
-          # 新增：从 hidden 分支追加 proxy 和 direct（工作流2 的做法）
+          # 新增：从 hidden 分支追加
           cat ./hidden/proxy.txt >> temp-proxy.txt
           cat ./hidden/direct.txt >> temp-direct.txt
-          # reject 已在前面步骤中追加，此处不再重复
+          # reject 已在前面追加，此处不再重复
 
       - name: Sort and generate redundant lists
         run: |
           cat temp-proxy.txt | sort --ignore-case -u > proxy-list-with-redundant
           cat temp-direct.txt | sort --ignore-case -u > direct-list-with-redundant
-          # 原有没有 reject，现新增对 reject 的排序（单独步骤）
 
       # 新增：对 reject 列表排序
       - name: Sort reject list
@@ -160,11 +163,10 @@ jobs:
 
       - name: Remove domains from "need-to-remove" lists in "hidden" branch
         run: |
-          # 原有：处理 direct 和 proxy（使用 removeFrom.py）
           python ./resouces/removeFrom.py -remove ./resouces/direct-need-to-remove.txt -from ./direct-list-without-redundant -out ./temp-cn.txt
           python ./resouces/removeFrom.py -remove ./resouces/proxy-need-to-remove.txt -from ./proxy-list-without-redundant -out ./temp-geolocation-\!cn.txt
 
-      # 新增：处理 reject 的 need-to-remove（使用 hidden 分支的文件）
+      # 新增：处理 reject 的 need-to-remove
       - name: Remove reject domains from need-to-remove
         run: |
           python ./resouces/removeFrom.py -remove ./hidden/reject-need-to-remove.txt -from ./reject-list-without-redundant -out ./temp-category-ads-all.txt
@@ -201,8 +203,8 @@ jobs:
       # 新增：生成额外分类列表（工作流2 独有）
       - name: Create additional category lists
         run: |
-          # china-list（从 dnsmasq china 列表）
-          curl -sSL $CHINA_DOMAINS_URL | perl -ne '/^server=\/([^\/]+)\// && print "$1\n"' > ./community/data/china-list
+          # china-list 使用 accelerated-domains.china.conf（工作流2 原始做法）
+          curl -sSL ${ACCELERATED_DOMAINS_URL} | perl -ne '/^server=\/([^\/]+)\// && print "$1\n"' > ./community/data/china-list
           # greatfire（从 hidden 分支复制，若存在）
           [ -f ./hidden/greatfire ] && cat ./hidden/greatfire > ./community/data/greatfire || echo "greatfire not found in hidden, skip"
           # 广告子分类
@@ -237,7 +239,6 @@ jobs:
       - name: Build geosite.dat file
         run: |
           cd custom || exit 1
-          # 新增：追加 ipleak.net 和 browserleaks.org 到 proxy（工作流2 没有，但沿用工作流1）
           echo ipleak.net >> ../community/data/geolocation-\!cn && echo browserleaks.org >> ../community/data/geolocation-\!cn
           go run ./ --datapath=../community/data
 
@@ -344,18 +345,6 @@ jobs:
           go run ./ asn -o ../meta-rule/asn
           go run ./ asn -o ../sing-rule/asn -t sing-box
 
-      # - name: Convert bm7-rule-set to sing-rule-set
-      #   env:
-      #     NO_SKIP: true
-      #   run: |
-      #     mkdir -p ./sing-rule/bm7
-      #     cp ./resouces/bm7.sh ./sing-rule/bm7/
-      #     cd ./sing-rule/bm7
-      #     wget https://github.com/SagerNet/sing-box/releases/download/v1.8.0-alpha.1/sing-box-1.8.0-alpha.1-linux-amd64.tar.gz -O sing-box.tar.gz && tar zxvf sing-box.tar.gz && mv sing-box-1.8.0-alpha.1-linux-amd64/sing-box ./ && rm -r sing-box-1.8.0-alpha.1-linux-amd64
-      #     ls
-      #     chmod 755 bm7.sh && ./bm7.sh
-      #     rm -r bm7.sh sing-box* rule
-
       - name: Build BundleMRS.7z
         run: |
           sudo apt-get update
@@ -445,4 +434,3 @@ jobs:
           for file in $(ls); do
             curl -i "https://purge.jsdelivr.net/gh/${{ github.repository }}@release/${file}"
           done
-          
